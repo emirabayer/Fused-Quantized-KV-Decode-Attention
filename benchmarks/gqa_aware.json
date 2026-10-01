@@ -1,0 +1,26 @@
+{
+  "rows": [
+    {
+      "B": 1,
+      "W": 8,
+      "gqa_aware_ms": 0.24166400730609894,
+      "expand_kernel_ms": 0.5898240208625793,
+      "speedup": 2.4406779786428454
+    },
+    {
+      "B": 4,
+      "W": 8,
+      "gqa_aware_ms": 0.45875200629234314,
+      "expand_kernel_ms": 0.8734719753265381,
+      "speedup": 1.9040177772430527
+    },
+    {
+      "B": 16,
+      "W": 8,
+      "gqa_aware_ms": 0.4505600035190582,
+      "expand_kernel_ms": 1.614848017692566,
+      "speedup": 3.584090920365637
+    }
+  ],
+  "note": "GQA-aware avoids repeat_kv materialization"
+}
