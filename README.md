@@ -2,8 +2,8 @@
 
 A single-query decode-step attention kernel for CUDA, written for the A100. One kernel does qK^T, an
 online softmax, and the weighted sum over V, with fp32 accumulation and no global score buffer. There
-are four single-block variants (fp16, int8 KV, int4 KV, and GQA-aware fp16) and a split-K version for
-long context that is compared against FlashInfer. Profiled on an A100-SXM4-40GB.
+are four single-block variants (fp16, int8 KV, int4 KV, and GQA-aware fp16) and a GQA-aware split-K
+kernel for long context, compared against FlashInfer. Profiled on an A100-SXM4-40GB.
 
 ## Results
 
@@ -40,55 +40,59 @@ GQA-aware kernel against expanding the KV heads with repeat_kv and calling the p
 This is the cost that repeat_kv materialization adds to the baseline. In the live model the GQA kernel
 runs at parity with SDPA's own GQA path.
 
-## Split-K decode and FlashInfer comparison
+## GQA-aware split-K decode and FlashInfer comparison
 
-The newest kernel is a split-K (FlashDecoding-style) version in kernels/decode_attn_splitk.cu. The
-single-block kernels above give one block per head, so at long context that one block walks the whole
-KV cache while most of the GPU sits idle. Split-K cuts the sequence into S contiguous chunks and gives
-each (head, chunk) pair its own block. A partial kernel runs the online softmax over its chunk and
-writes unnormalized (m, l, o) partials to fp32 scratch, then a small combine kernel merges the S
-partials per head into the final output. S is chosen per shape by measurement.
+The newest kernel is a GQA-aware split-K (FlashDecoding-style) decode kernel in
+kernels/decode_attn_gqa_sk_fast.cu, compared against FlashInfer's single_decode. The single-block
+kernels above give one block per head, so at long context that block walks the whole KV cache while
+most of the GPU sits idle. Split-K cuts the sequence into S contiguous chunks and gives each (head,
+chunk) pair its own block. A partial kernel runs the online softmax over its chunk into preallocated
+fp32 scratch, then a parallel combine kernel (CW warps) merges the S partials per head. The kernel
+reads compact KV head h/G directly, so it never expands the KV heads. S, W, and CW are chosen per shape
+by measurement.
 
-Measured against FlashInfer's single_decode on the A100, fp16, as speedup over FlashInfer (above 1.0
-means split-K is faster):
+An earlier version of this comparison was wrong in two ways and has been replaced. It timed our kernel
+reading KV expanded to 32 heads while FlashInfer read the compact 8-head GQA cache, a 4x byte
+difference, and it mixed launch overhead into only part of the timing. The numbers here read the same
+compact 8-head KV on both sides and loop-time both sides the same way (2000 calls per measurement, with
+the scratch preallocated outside the timed loop).
+
+Loop-timed on the A100, fp16, as FlashInfer call latency over ours (above 1.0 means our call returns
+sooner):
 
 | N | head_dim 64 | head_dim 128 |
 |---|---|---|
-| 512 | 1.59x | 1.62x |
-| 1024 | 1.48x | 1.52x |
-| 2048 | 1.28x | 0.94x |
-| 4096 | 0.82x | 0.63x |
-| 8192 | 0.49x | 0.43x |
-| 16384 | 0.35x | 0.34x |
+| 512 | 2.72x | 2.42x |
+| 1024 | 2.21x | 1.92x |
+| 2048 | 1.66x | 1.41x |
+| 4096 | 1.12x | 0.93x |
+| 8192 | 0.72x | 0.45x |
+| 16384 | 0.32x | 0.48x |
 
-Split-K is faster than FlashInfer up to about 2K context at head_dim 64, and up to about 1K at head_dim
-128, reaching about 1.6x at short context. head_dim 128 crosses over to FlashInfer at a smaller N
-because each token carries twice the bytes, so the memory-bound regime where FlashInfer wins starts
-earlier. The crossover is in plots/flashinfer_crossover.png.
+Short context: our call returns sooner, up to 2.7x, and stays ahead until the crossover around N=4K
+(head_dim 64 is 1.12x at 4K, head_dim 128 is 0.93x). This is a lower-per-call-overhead effect. Our
+extension dispatches in about 10us while FlashInfer has a floor near 28us, so at short context the call
+completes sooner even though the kernel itself is no faster. The crossover is in
+plots/flashinfer_crossover.png.
 
-At long context the split-K parallelization is what makes the kernel usable. At head_dim 64, N=16384 a
-single block (S=1) takes 1.69 ms, about 29x slower than FlashInfer's 0.058 ms. Split-K brings that to
-0.166 ms, about 2.8x slower, so the long-context gap goes from roughly 29x to about 3x.
+Long context (N at or above 8K): FlashInfer wins. At 16K we are 0.32x at head_dim 64 and 0.48x at
+head_dim 128. On sustained bandwidth FlashInfer reaches about 1100 GB/s at long context, around 71% of
+the A100's 1555 GB/s peak, while ours peaks around 500 GB/s, about a third of peak and lower at head_dim
+64, so its kernel is roughly 2x more bandwidth-efficient. Profiling the partial kernel at head_dim 128,
+N=16384 shows nothing saturated: about 52% SM throughput, 44% memory throughput, 30% DRAM throughput,
+and 80% occupancy. The long-context gap is overall memory-pipeline efficiency rather than one isolated
+bottleneck. Tensor cores do not explain it. profile_gsk.py and the ncu command inside it reproduce the
+profile.
 
-The rest of the gap is bandwidth. Profiling the partial kernel at head_dim 128, N=16384 with Nsight
-Compute shows about 57% occupancy, 69% DRAM throughput, and 29% compute, so the kernel is memory bound
-and FlashInfer's long-context edge does not come from tensor cores. profile_splitk.py and the ncu
-command inside it reproduce this.
+Two notes on reading the table:
 
-Two things about the comparison:
+- The GB/s at short N is launch-floor-limited and partly served from L2 (the A100 L2 is 40MB, and the
+  KV cache fits in it for every shape here except head_dim 128 at 16K). Those are call-rate numbers, so
+  read the long-context rows for sustained DRAM bandwidth.
+- The comparison is fp16 only by design. FlashInfer's quantized decode path is fp8, while the quantized
+  kernels here are int8 and int4, so there is no matching quantized comparison to run.
 
-- The split-K timings allocate the fp32 scratch inside the timed call, which penalizes split-K. The
-  real speedups are a little higher than the table shows.
-- The comparison is fp16 only. FlashInfer's quantized decode path is fp8, while the quantized kernels
-  here are int8 and int4, so there is no matching quantized comparison to run.
-
-I tried two changes that did not help and kept them out of the main kernel. A vectorized partial kernel
-(kernels/decode_attn_splitk_vec.cu, 32-bit and 64-bit K and V loads with all 32 lanes active) came
-within 2 to 3% of the scalar version, because the kernel is bandwidth bound rather than limited by load
-issue. Lowering W to raise occupancy also did not help: at head_dim 128, N=16384 the best time was W=8,
-S=16, and W=4 and W=2 were slower.
-
-flashinfer_compare.py reproduces the comparison table.
+flashinfer_looptimed.py reproduces the table.
 
 ## How it works
 
@@ -120,7 +124,7 @@ pip install torch pytest
 pytest tests/
 ```
 
-The suite has 15 tests, covering all six kernels, and skips automatically on a machine with no CUDA.
+The suite has 13 tests, covering all five kernels, and skips automatically on a machine with no CUDA.
 
 Each kernel is loaded as a function, for example:
 
@@ -141,12 +145,11 @@ out = m.decode_attn_fp16_mw(q, K, V, W)   # q:[B,D]  K,V:[B,N,D]  W warps
 
 ## Layout
 
-- kernels/ : the six CUDA sources (four single-block, plus split-K scalar and vectorized)
+- kernels/ : the five CUDA sources (four single-block, plus the GQA-aware split-K kernel)
 - tests/ : pytest suite
 - benchmarks/ : raw measured JSON, consolidated into results.json
 - plots/ : charts, including flashinfer_crossover.png
-- flashinfer_compare.py : reproduces the split-K vs FlashInfer table
-- profile_splitk.py : runs the long-context shape under Nsight Compute
+- flashinfer_looptimed.py : reproduces the GQA-aware split-K vs FlashInfer table
+- profile_gsk.py : runs the long-context shape under Nsight Compute
 - notebooks/ : integration_and_benchmarks.ipynb (the live Llama-3.2-1B integration, int4 accuracy, and
-  end-to-end benchmark) and splitk_flashinfer.ipynb (the split-K kernel development and the FlashInfer
-  comparison)
+  end-to-end benchmark)

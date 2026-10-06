@@ -1,0 +1,151 @@
+{
+  "note": "Loop-timed (2000 calls/measurement), launch/API overhead present but IDENTICAL on both sides; launch floor ~8.95us reported separately. Equal-byte compact 8-head GQA KV (kv_bytes=2*N*Hkv*D*2). HONEST reading: short-context wins are a lower-per-call-overhead effect (our ~10us dispatch vs FlashInfer's ~28us floor), NOT a faster kernel. On sustained bandwidth (N>=8K) FlashInfer reaches ~1100 GB/s (up to ~73% of peak) vs ours ~500 GB/s (~33%); its kernel is ~2x more bandwidth-efficient and wins at long context. Crossover ~N=4K. Small-N GB/s is launch-floor-limited and partly L2-resident (A100 L2=40MB); not sustained DRAM. fp16 only (FlashInfer quantized path is fp8, not our int8/int4).",
+  "launch_floor_us": 8.95,
+  "peak_GBs": 1555.0,
+  "rows": [
+    {
+      "D": 64,
+      "N": 512,
+      "kv_bytes": 1048576,
+      "ours_us": 10.48,
+      "ours_GBs": 100,
+      "fi_us": 28.51,
+      "fi_GBs": 37,
+      "ratio": 2.72,
+      "best_cfg": "S16W8C4",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 64,
+      "N": 1024,
+      "kv_bytes": 2097152,
+      "ours_us": 12.57,
+      "ours_GBs": 167,
+      "fi_us": 27.81,
+      "fi_GBs": 75,
+      "ratio": 2.21,
+      "best_cfg": "S16W8C4",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 64,
+      "N": 2048,
+      "kv_bytes": 4194304,
+      "ours_us": 16.93,
+      "ours_GBs": 248,
+      "fi_us": 28.13,
+      "fi_GBs": 149,
+      "ratio": 1.66,
+      "best_cfg": "S16W8C4",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 64,
+      "N": 4096,
+      "kv_bytes": 8388608,
+      "ours_us": 25.05,
+      "ours_GBs": 335,
+      "fi_us": 28.15,
+      "fi_GBs": 298,
+      "ratio": 1.12,
+      "best_cfg": "S32W8C8",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 64,
+      "N": 8192,
+      "kv_bytes": 16777216,
+      "ours_us": 39.23,
+      "ours_GBs": 428,
+      "fi_us": 28.37,
+      "fi_GBs": 591,
+      "ratio": 0.72,
+      "best_cfg": "S32W8C8",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 64,
+      "N": 16384,
+      "kv_bytes": 33554432,
+      "ours_us": 94.3,
+      "ours_GBs": 356,
+      "fi_us": 30.26,
+      "fi_GBs": 1109,
+      "ratio": 0.32,
+      "best_cfg": "S128W8C8",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 128,
+      "N": 512,
+      "kv_bytes": 2097152,
+      "ours_us": 11.86,
+      "ours_GBs": 177,
+      "fi_us": 28.68,
+      "fi_GBs": 73,
+      "ratio": 2.42,
+      "best_cfg": "S16W8C4",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 128,
+      "N": 1024,
+      "kv_bytes": 4194304,
+      "ours_us": 14.71,
+      "ours_GBs": 285,
+      "fi_us": 28.23,
+      "fi_GBs": 149,
+      "ratio": 1.92,
+      "best_cfg": "S16W8C4",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 128,
+      "N": 2048,
+      "kv_bytes": 8388608,
+      "ours_us": 20.11,
+      "ours_GBs": 417,
+      "fi_us": 28.33,
+      "fi_GBs": 296,
+      "ratio": 1.41,
+      "best_cfg": "S16W8C4",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 128,
+      "N": 4096,
+      "kv_bytes": 16777216,
+      "ours_us": 30.63,
+      "ours_GBs": 548,
+      "fi_us": 28.52,
+      "fi_GBs": 588,
+      "ratio": 0.93,
+      "best_cfg": "S16W8C4",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 128,
+      "N": 8192,
+      "kv_bytes": 33554432,
+      "ours_us": 74.25,
+      "ours_GBs": 452,
+      "fi_us": 33.53,
+      "fi_GBs": 1001,
+      "ratio": 0.45,
+      "best_cfg": "S64W8C8",
+      "kv_fits_L2": true
+    },
+    {
+      "D": 128,
+      "N": 16384,
+      "kv_bytes": 67108864,
+      "ours_us": 129.34,
+      "ours_GBs": 519,
+      "fi_us": 61.72,
+      "fi_GBs": 1087,
+      "ratio": 0.48,
+      "best_cfg": "S128W8C8",
+      "kv_fits_L2": false
+    }
+  ]
+}
